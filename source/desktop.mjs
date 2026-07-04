@@ -480,6 +480,7 @@ desktop.Host = class {
             let context = null;
             try {
                 context = await this._context(path);
+                this._applyCustomStyle(path);
                 this._telemetry.set('session_engaged', 1);
             } catch (error) {
                 await this._view.error(error, 'Error while reading file.');
@@ -597,6 +598,37 @@ desktop.Host = class {
 
     _element(id) {
         return this.document.getElementById(id);
+    }
+
+    _applyCustomStyle(file) {
+        const document = this.document;
+        const id = 'netron-custom-style';
+        const existing = document.getElementById(id);
+        if (existing && existing.parentNode) {
+            existing.parentNode.removeChild(existing);
+        }
+        // For a model file such as '<name>.pb' look for a sibling '<name>.css'
+        // (and also '<name>.pb.css') and inject it so the visualizer can be themed per model.
+        const candidates = [];
+        const extension = path.extname(file);
+        if (extension) {
+            candidates.push(`${file.substring(0, file.length - extension.length)}.css`);
+        }
+        candidates.push(`${file}.css`);
+        for (const candidate of candidates) {
+            try {
+                if (candidate !== file && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                    const content = fs.readFileSync(candidate, 'utf-8');
+                    const element = document.createElement('style');
+                    element.id = id;
+                    element.textContent = content;
+                    (document.head || document.documentElement).appendChild(element);
+                    break;
+                }
+            } catch {
+                // ignore invalid or unreadable custom style files
+            }
+        }
     }
 
     update(data) {

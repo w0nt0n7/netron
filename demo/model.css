@@ -1,0 +1,61 @@
+/*
+ * Netron custom-style demo.
+ *
+ * This file is auto-loaded because it sits next to "model.pb" and shares its
+ * base name. Netron injects it into the visualizer after the model opens, so
+ * these rules override the built-in grapher.css styling.
+ *
+ * Try it:  open demo/model.pb in the desktop app (it also picks up model.pb.css).
+ */
+
+/* Operator node bodies -> teal with rounded, thicker borders. */
+.node-item-type path {
+    fill: #0b7285;
+    stroke: #063b45;
+    stroke-width: 2px;
+}
+.node-item-type text {
+    fill: #e6fcff;
+    font-weight: bold;
+}
+.node-item-type:hover path {
+    fill: #12a4bd;
+}
+.node-item-type:hover text {
+    fill: #ffffff;
+}
+
+/* Constant / weight nodes -> warm amber. */
+.node-item-type-constant path,
+.node-item-constant path {
+    fill: #f59f00;
+    stroke: #9c6402;
+    stroke-width: 2px;
+}
+.node-item-type-constant text {
+    fill: #3d2800;
+    font-weight: bold;
+}
+
+/* Model input / output pills -> purple. */
+.graph-item-input path,
+.graph-item-output path {
+    fill: #7048e8;
+    stroke: #3b1fa8;
+    stroke-width: 2px;
+}
+
+/* Edges -> bold magenta with matching arrowheads. */
+.edge-path {
+    stroke: #d6336c;
+    stroke-width: 2px;
+}
+#arrowhead {
+    fill: #d6336c;
+}
+
+/* Edge labels. */
+.edge-label {
+    fill: #d6336c;
+    font-weight: bold;
+}
