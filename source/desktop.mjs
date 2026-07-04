@@ -228,8 +228,8 @@ desktop.Host = class {
         });
         electron.ipcRenderer.on('window-state', (sender, data) => {
             if (this._environment.titlebar) {
-                this._element('target').style.marginTop = '32px';
-                this._element('target').style.height = 'calc(100% - 32px)';
+                this._element('workspace').style.marginTop = '32px';
+                this._element('workspace').style.height = 'calc(100% - 32px)';
                 this._element('sidebar-title').style.marginTop = '24px';
                 this._element('sidebar-closebutton').style.marginTop = '24px';
                 this._element('titlebar').classList.add('titlebar-visible');
@@ -493,6 +493,7 @@ desktop.Host = class {
                     this._view.show(null);
                 } else {
                     const model = await this._view.open(context);
+                    this._applyProfile(path);
                     this._view.show(null);
                     const options = { ...this._view.options };
                     if (model) {
@@ -629,6 +630,30 @@ desktop.Host = class {
                 // ignore invalid or unreadable custom style files
             }
         }
+    }
+
+    _applyProfile(file) {
+        // For a model file such as '<name>.pb' look for a sibling profiling file
+        // '<name>.profile.jsonl' (and '<name>.<ext>.profile.jsonl') and load it into
+        // the bottom profiling panel.
+        const candidates = [];
+        const extension = path.extname(file);
+        if (extension) {
+            candidates.push(`${file.substring(0, file.length - extension.length)}.profile.jsonl`);
+        }
+        candidates.push(`${file}.profile.jsonl`);
+        for (const candidate of candidates) {
+            try {
+                if (candidate !== file && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                    const content = fs.readFileSync(candidate, 'utf-8');
+                    this._view.profile(content);
+                    return;
+                }
+            } catch {
+                // ignore invalid or unreadable profiling files
+            }
+        }
+        this._view.clearProfile();
     }
 
     update(data) {

@@ -53,6 +53,14 @@ view.View = class {
             this._element('zoom-out-button').addEventListener('click', () => {
                 this.zoomOut();
             });
+            const profileButton = this._element('profile-button');
+            if (profileButton) {
+                profileButton.addEventListener('click', () => {
+                    if (this._profilePanel) {
+                        this._profilePanel.toggle();
+                    }
+                });
+            }
             this._element('toolbar-path-back-button').addEventListener('click', async () => {
                 await this.popTarget();
             });
@@ -305,6 +313,22 @@ view.View = class {
                 this._target.scrollTo(this._target.activate(value, 'sidebar'));
             });
             this._sidebar.open(sidebar, 'Find');
+        }
+    }
+
+    profile(content) {
+        try {
+            const profile = new view.Profile(content);
+            this._profilePanel = this._profilePanel || new view.ProfilePanel(this);
+            this._profilePanel.load(profile);
+        } catch (error) {
+            this.error(error, 'Error loading profiling data.', null);
+        }
+    }
+
+    clearProfile() {
+        if (this._profilePanel) {
+            this._profilePanel.clear();
         }
     }
 
@@ -1161,6 +1185,9 @@ view.View = class {
                     this._target.scrollTo(this._target.activate(value, 'sidebar'));
                 });
                 this._sidebar.open(sidebar, 'Node Properties', source);
+                if (this._profilePanel) {
+                    this._profilePanel.select(node);
+                }
             } catch (error) {
                 this.error(error, 'Error showing node properties.', null);
             }
@@ -3392,7 +3419,7 @@ view.Sidebar = class {
     _update(stack) {
         const sidebar = this._element('sidebar');
         const element = this._element('sidebar-content');
-        const container = this._element('target');
+        const container = this._element('workspace') || this._element('target');
         const closeButton = this._element('sidebar-closebutton');
         closeButton.removeEventListener('click', this._closeSidebarHandler);
         this._host.document.removeEventListener('keydown', this._closeSidebarKeyDownHandler);
@@ -3432,8 +3459,554 @@ view.Sidebar = class {
             const clone = element.cloneNode(true);
             element.parentNode.replaceChild(clone, element);
             container.style.width = '100%';
-            container.focus();
+            const target = this._element('target');
+            if (target) {
+                target.focus();
+            }
         }
+    }
+};
+
+view.Profile = class {
+
+    constructor(content) {
+        this._records = [];
+        this._index = new Map();
+        const reserved = new Set(['node', 'name', 'id', 'identifier', 'kernels', 'metrics', 'type', 'signature']);
+        const lines = typeof content === 'string' ? content.split('\n') : [];
+        for (let line of lines) {
+            line = line.trim();
+            if (line === '' || line.startsWith('#') || line.startsWith('//')) {
+                continue;
+            }
+            let obj = null;
+            try {
+                obj = JSON.parse(line);
+            } catch {
+                continue;
+            }
+            if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+                continue;
+            }
+            if (obj.type === 'netron:profile' || obj.signature === 'netron:profile') {
+                continue; // optional header line
+            }
+            const name = obj.node || obj.name || obj.id || obj.identifier || null;
+            if (name === null || name === undefined) {
+                continue;
+            }
+            const metrics = {};
+            if (obj.metrics && typeof obj.metrics === 'object') {
+                for (const [key, value] of Object.entries(obj.metrics)) {
+                    metrics[key] = value;
+                }
+            }
+            for (const [key, value] of Object.entries(obj)) {
+                if (!reserved.has(key) && (typeof value === 'number' || typeof value === 'string')) {
+                    metrics[key] = value;
+                }
+            }
+            const kernels = Array.isArray(obj.kernels) ? obj.kernels.filter((kernel) => kernel && typeof kernel === 'object') : [];
+            const record = { name: String(name), metrics, kernels };
+            this._records.push(record);
+            this._index.set(record.name, record);
+            if (obj.identifier !== undefined && obj.identifier !== null) {
+                this._index.set(String(obj.identifier), record);
+            }
+            if (obj.id !== undefined && obj.id !== null) {
+                this._index.set(String(obj.id), record);
+            }
+        }
+    }
+
+    get empty() {
+        return this._records.length === 0;
+    }
+
+    get records() {
+        return this._records;
+    }
+
+    node(node) {
+        if (!node) {
+            return null;
+        }
+        if (node.name && this._index.has(node.name)) {
+            return this._index.get(node.name);
+        }
+        if (node.identifier && this._index.has(String(node.identifier))) {
+            return this._index.get(String(node.identifier));
+        }
+        if (node.name) {
+            const short = node.name.split('/').pop();
+            if (this._index.has(short)) {
+                return this._index.get(short);
+            }
+        }
+        return null;
+    }
+
+    primaryTimeKey() {
+        if (this._primaryTimeKey === undefined) {
+            const preferred = ['gpu_time_us', 'gpu_time', 'time_us', 'duration_us', 'total_time_us', 'total_time', 'time', 'duration'];
+            const keys = new Set();
+            for (const record of this._records) {
+                for (const [key, value] of Object.entries(record.metrics)) {
+                    if (typeof value === 'number') {
+                        keys.add(key);
+                    }
+                }
+            }
+            this._primaryTimeKey = preferred.find((key) => keys.has(key)) || (keys.size > 0 ? Array.from(keys)[0] : null);
+        }
+        return this._primaryTimeKey;
+    }
+};
+
+view.ProfilePanel = class {
+
+    constructor(context) {
+        this._view = context;
+        this._host = context.host;
+        this._document = this._host.document;
+        this._profile = null;
+        this._node = null;
+        this._tab = 'summary';
+        this._sort = null;
+        this._element = this._document.getElementById('panel');
+        this._button = this._document.getElementById('profile-button');
+        this._build();
+        this._host.window.addEventListener('resize', () => {
+            if (this._element.classList.contains('panel-visible')) {
+                this._render();
+            }
+        });
+    }
+
+    _build() {
+        const doc = this._document;
+        this._element.replaceChildren();
+        const resize = doc.createElement('div');
+        resize.className = 'panel-resize';
+        this._element.appendChild(resize);
+        this._initResize(resize);
+        const header = doc.createElement('div');
+        header.className = 'panel-header';
+        this._tabs = new Map();
+        for (const [id, label] of [['summary', 'Summary'], ['kernels', 'Kernels']]) {
+            const tab = doc.createElement('div');
+            tab.className = `panel-tab${this._tab === id ? ' active' : ''}`;
+            tab.textContent = label;
+            tab.addEventListener('click', () => {
+                this._tab = id;
+                this._sort = null;
+                for (const [key, element] of this._tabs) {
+                    element.classList.toggle('active', key === id);
+                }
+                this._render();
+            });
+            this._tabs.set(id, tab);
+            header.appendChild(tab);
+        }
+        this._titleElement = doc.createElement('div');
+        this._titleElement.className = 'panel-title';
+        header.appendChild(this._titleElement);
+        const close = doc.createElement('div');
+        close.className = 'panel-close';
+        close.innerHTML = '&times;';
+        close.setAttribute('title', 'Hide Panel');
+        close.addEventListener('click', () => this.hide());
+        header.appendChild(close);
+        this._element.appendChild(header);
+        this._content = doc.createElement('div');
+        this._content.className = 'panel-content';
+        this._element.appendChild(this._content);
+    }
+
+    _initResize(handle) {
+        const doc = this._document;
+        let startY = 0;
+        let startHeight = 0;
+        const move = (e) => {
+            const delta = startY - e.clientY;
+            const max = doc.documentElement.clientHeight * 0.8;
+            const height = Math.max(120, Math.min(startHeight + delta, max));
+            this._element.style.height = `${height}px`;
+            this._layout();
+        };
+        const up = () => {
+            doc.removeEventListener('mousemove', move);
+            doc.removeEventListener('mouseup', up);
+            this._render();
+        };
+        handle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            startY = e.clientY;
+            startHeight = this._element.offsetHeight;
+            doc.addEventListener('mousemove', move);
+            doc.addEventListener('mouseup', up);
+        });
+    }
+
+    load(profile) {
+        this._profile = profile;
+        this._node = null;
+        this._sort = null;
+        const available = profile && !profile.empty;
+        if (this._button) {
+            this._button.style.display = available ? '' : 'none';
+        }
+        if (available) {
+            this.show();
+            this._render();
+        } else {
+            this.hide();
+        }
+    }
+
+    clear() {
+        this._profile = null;
+        this._node = null;
+        if (this._button) {
+            this._button.style.display = 'none';
+        }
+        this.hide();
+    }
+
+    select(node) {
+        if (!this._profile) {
+            return;
+        }
+        this._node = node && this._profile.node(node) ? node : null;
+        if (this._element.classList.contains('panel-visible')) {
+            this._render();
+        }
+    }
+
+    show() {
+        this._element.classList.add('panel-visible');
+        this._layout();
+    }
+
+    hide() {
+        this._element.classList.remove('panel-visible');
+        this._layout();
+    }
+
+    toggle() {
+        if (this._element.classList.contains('panel-visible')) {
+            this.hide();
+        } else if (this._profile && !this._profile.empty) {
+            this.show();
+            this._render();
+        }
+    }
+
+    _layout() {
+        const toolbar = this._document.getElementById('toolbar');
+        if (toolbar) {
+            const visible = this._element.classList.contains('panel-visible');
+            const height = visible ? this._element.offsetHeight : 0;
+            toolbar.style.bottom = `${10 + height}px`;
+        }
+    }
+
+    _render() {
+        if (!this._profile) {
+            return;
+        }
+        const record = this._node ? this._profile.node(this._node) : null;
+        this._titleElement.textContent = record ? this._node.name || '' : 'Model overview';
+        this._content.replaceChildren();
+        if (this._tab === 'summary') {
+            this._renderSummary(record);
+        } else {
+            this._renderKernels(record);
+        }
+    }
+
+    _renderSummary(record) {
+        const doc = this._document;
+        if (record) {
+            this._addMetrics(Object.entries(record.metrics).map(([name, value]) => ({ name, value })));
+            const kernels = record.kernels.slice();
+            if (kernels.length > 0) {
+                this._addSection('GPU time by kernel');
+                const items = kernels.map((kernel) => {
+                    const key = this._timeField(kernel);
+                    return { label: kernel.name || '(kernel)', value: key ? Number(kernel[key]) || 0 : 0, key };
+                });
+                items.sort((a, b) => b.value - a.value);
+                this._content.appendChild(this._histogram(items.slice(0, 20)));
+            } else {
+                const empty = doc.createElement('div');
+                empty.className = 'panel-empty';
+                empty.textContent = 'No kernel breakdown for this node.';
+                this._content.appendChild(empty);
+            }
+        } else {
+            const records = this._profile.records;
+            const key = this._profile.primaryTimeKey();
+            let total = 0;
+            let kernelCount = 0;
+            for (const item of records) {
+                if (key && typeof item.metrics[key] === 'number') {
+                    total += item.metrics[key];
+                }
+                kernelCount += item.kernels.length;
+            }
+            const metrics = [{ name: 'nodes profiled', value: records.length }];
+            if (key) {
+                metrics.push({ name: `total ${key}`, value: total });
+            }
+            if (kernelCount > 0) {
+                metrics.push({ name: 'kernels', value: kernelCount });
+            }
+            this._addMetrics(metrics);
+            if (key) {
+                this._addSection(`Top nodes by ${key}`);
+                const items = records
+                    .map((item) => ({ label: item.name, value: typeof item.metrics[key] === 'number' ? item.metrics[key] : 0, key }))
+                    .filter((item) => item.value > 0);
+                items.sort((a, b) => b.value - a.value);
+                this._content.appendChild(this._histogram(items.slice(0, 20)));
+            } else {
+                const empty = doc.createElement('div');
+                empty.className = 'panel-empty';
+                empty.textContent = 'No numeric metrics found in the profile.';
+                this._content.appendChild(empty);
+            }
+        }
+    }
+
+    _renderKernels(record) {
+        let kernels = [];
+        if (record) {
+            kernels = record.kernels.map((kernel) => ({ ...kernel }));
+        } else {
+            const aggregate = new Map();
+            for (const item of this._profile.records) {
+                for (const kernel of item.kernels) {
+                    const name = kernel.name || '(kernel)';
+                    if (!aggregate.has(name)) {
+                        aggregate.set(name, { name });
+                    }
+                    const entry = aggregate.get(name);
+                    for (const [key, value] of Object.entries(kernel)) {
+                        if (key !== 'name' && typeof value === 'number') {
+                            entry[key] = (entry[key] || 0) + value;
+                        } else if (key !== 'name' && !(key in entry)) {
+                            entry[key] = value;
+                        }
+                    }
+                }
+            }
+            kernels = Array.from(aggregate.values());
+        }
+        if (kernels.length === 0) {
+            const empty = this._document.createElement('div');
+            empty.className = 'panel-empty';
+            empty.textContent = record ? 'No kernel breakdown for this node.' : 'No kernels found in the profile.';
+            this._content.appendChild(empty);
+            return;
+        }
+        this._content.appendChild(this._table(kernels));
+    }
+
+    _addMetrics(metrics) {
+        if (!Array.isArray(metrics) || metrics.length === 0) {
+            return;
+        }
+        const container = this._document.createElement('div');
+        container.className = 'panel-summary';
+        for (const metric of metrics) {
+            const item = this._document.createElement('div');
+            item.className = 'panel-metric';
+            const value = this._document.createElement('div');
+            value.className = 'panel-metric-value';
+            value.textContent = this._format(metric.name, metric.value);
+            const name = this._document.createElement('div');
+            name.className = 'panel-metric-name';
+            name.textContent = metric.name;
+            item.appendChild(value);
+            item.appendChild(name);
+            container.appendChild(item);
+        }
+        this._content.appendChild(container);
+    }
+
+    _addSection(title) {
+        const element = this._document.createElement('div');
+        element.className = 'panel-section';
+        element.textContent = title;
+        this._content.appendChild(element);
+    }
+
+    _histogram(items) {
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const doc = this._document;
+        const width = Math.max(320, (this._content.clientWidth || 832) - 32);
+        const rowHeight = 24;
+        const barHeight = 12;
+        const labelWidth = Math.min(240, Math.round(width * 0.35));
+        const valueWidth = 96;
+        const barX = labelWidth + 10;
+        const barWidth = Math.max(40, width - barX - valueWidth - 10);
+        const height = Math.max(rowHeight, items.length * rowHeight);
+        const max = items.reduce((acc, item) => Math.max(acc, item.value), 0) || 1;
+        const svg = doc.createElementNS(svgNS, 'svg');
+        svg.setAttribute('class', 'panel-chart');
+        svg.setAttribute('width', width);
+        svg.setAttribute('height', height);
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        const create = (tag, attrs) => {
+            const element = doc.createElementNS(svgNS, tag);
+            for (const [key, value] of Object.entries(attrs)) {
+                element.setAttribute(key, value);
+            }
+            return element;
+        };
+        items.forEach((item, index) => {
+            const y = index * rowHeight;
+            const barY = y + (rowHeight - barHeight) / 2;
+            const background = create('rect', { 'class': 'panel-bar-bg', x: 0, y, width, height: rowHeight, rx: 3 });
+            const title = doc.createElementNS(svgNS, 'title');
+            title.textContent = `${item.label}: ${this._format(item.key, item.value)}`;
+            background.appendChild(title);
+            svg.appendChild(background);
+            const label = create('text', { 'class': 'panel-bar-label', x: 0, y: y + rowHeight / 2 + 4 });
+            let text = item.label;
+            const limit = Math.floor(labelWidth / 6.5);
+            if (text.length > limit) {
+                text = `…${text.slice(text.length - limit + 1)}`;
+            }
+            label.textContent = text;
+            svg.appendChild(label);
+            svg.appendChild(create('rect', { 'class': 'panel-bar-track', x: barX, y: barY, width: barWidth, height: barHeight, rx: 3 }));
+            svg.appendChild(create('rect', { 'class': 'panel-bar', x: barX, y: barY, width: Math.max(1, Math.round((item.value / max) * barWidth)), height: barHeight, rx: 3 }));
+            const value = create('text', { 'class': 'panel-bar-value', x: barX + barWidth + 8, y: y + rowHeight / 2 + 4 });
+            value.textContent = this._format(item.key, item.value);
+            svg.appendChild(value);
+        });
+        return svg;
+    }
+
+    _table(rows) {
+        const doc = this._document;
+        const keys = [];
+        const numeric = new Map();
+        for (const row of rows) {
+            for (const [key, value] of Object.entries(row)) {
+                if (!keys.includes(key)) {
+                    keys.push(key);
+                    numeric.set(key, true);
+                }
+                if (typeof value !== 'number') {
+                    numeric.set(key, false);
+                }
+            }
+        }
+        const rank = (key) => {
+            if (key === 'name') {
+                return 0;
+            }
+            if (/time|dur|latency/i.test(key)) {
+                return 1;
+            }
+            if (/count|calls/i.test(key)) {
+                return 2;
+            }
+            return 3;
+        };
+        keys.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+        if (!this._sort || !keys.includes(this._sort.key)) {
+            const defaultKey = keys.find((key) => numeric.get(key) && key !== 'name') || keys[0];
+            this._sort = { key: defaultKey, dir: numeric.get(defaultKey) ? -1 : 1 };
+        }
+        const sorted = rows.slice().sort((a, b) => {
+            const x = a[this._sort.key];
+            const y = b[this._sort.key];
+            if (typeof x === 'number' && typeof y === 'number') {
+                return (x - y) * this._sort.dir;
+            }
+            return String(x === undefined ? '' : x).localeCompare(String(y === undefined ? '' : y)) * this._sort.dir;
+        });
+        const table = doc.createElement('table');
+        table.className = 'panel-table';
+        const thead = doc.createElement('thead');
+        const headerRow = doc.createElement('tr');
+        for (const key of keys) {
+            const th = doc.createElement('th');
+            if (numeric.get(key)) {
+                th.className = 'numeric';
+            }
+            let arrow = '';
+            if (this._sort.key === key) {
+                arrow = this._sort.dir < 0 ? ' \u25BC' : ' \u25B2';
+            }
+            th.textContent = key + arrow;
+            th.addEventListener('click', () => {
+                if (this._sort.key === key) {
+                    this._sort.dir = -this._sort.dir;
+                } else {
+                    this._sort = { key, dir: numeric.get(key) ? -1 : 1 };
+                }
+                this._render();
+            });
+            headerRow.appendChild(th);
+        }
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+        const tbody = doc.createElement('tbody');
+        for (const row of sorted) {
+            const tr = doc.createElement('tr');
+            for (const key of keys) {
+                const td = doc.createElement('td');
+                if (numeric.get(key)) {
+                    td.className = 'numeric';
+                }
+                const value = row[key];
+                td.textContent = value === undefined || value === null ? '' : this._format(key, value);
+                tr.appendChild(td);
+            }
+            tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        return table;
+    }
+
+    _timeField(kernel) {
+        for (const key of ['time_us', 'duration_us', 'gpu_time_us', 'time', 'duration']) {
+            if (typeof kernel[key] === 'number') {
+                return key;
+            }
+        }
+        for (const [key, value] of Object.entries(kernel)) {
+            if (key !== 'name' && typeof value === 'number') {
+                return key;
+            }
+        }
+        return null;
+    }
+
+    _format(key, value) {
+        if (typeof value !== 'number' || !isFinite(value)) {
+            return value === undefined || value === null ? '' : String(value);
+        }
+        const name = key ? key.toLowerCase() : '';
+        if (/pct|percent|%|ratio/.test(name)) {
+            return `${value.toFixed(1)}%`;
+        }
+        if (/(_us|us$|time|dur|latency)/.test(name)) {
+            if (Math.abs(value) >= 1000) {
+                return `${(value / 1000).toFixed(2)} ms`;
+            }
+            return `${value.toFixed(1)} \u00B5s`;
+        }
+        if (/count|calls|num|nodes|kernels/.test(name)) {
+            return Math.round(value).toLocaleString();
+        }
+        return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2);
     }
 };
 

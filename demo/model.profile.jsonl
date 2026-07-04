@@ -1,0 +1,11 @@
+{"type": "netron:profile", "unit": "microseconds", "source": "nsys (converted)"}
+{"node": "input", "gpu_time_us": 12.4, "gpu_time_pct": 0.2, "call_count": 40, "kernels": []}
+{"node": "conv1", "gpu_time_us": 4213.7, "gpu_time_pct": 46.1, "call_count": 40, "kernels": [{"name": "implicit_convolve_sgemm", "time_us": 3120.5, "calls": 40, "grid": "(64,8,1)", "block": "(128,1,1)"}, {"name": "cudnn::winograd_nonfused", "time_us": 893.2, "calls": 40, "grid": "(32,8,1)", "block": "(256,1,1)"}, {"name": "add_bias_kernel", "time_us": 200.0, "calls": 40, "grid": "(16,1,1)", "block": "(256,1,1)"}]}
+{"node": "conv1/relu", "gpu_time_us": 214.9, "gpu_time_pct": 2.4, "call_count": 40, "kernels": [{"name": "elementwise_relu_fp32", "time_us": 214.9, "calls": 40, "grid": "(80,1,1)", "block": "(256,1,1)"}]}
+{"node": "pool1", "gpu_time_us": 512.3, "gpu_time_pct": 5.6, "call_count": 40, "kernels": [{"name": "cudnn::maxpool_nchw", "time_us": 512.3, "calls": 40, "grid": "(40,4,1)", "block": "(256,1,1)"}]}
+{"node": "fc/matmul", "gpu_time_us": 3401.2, "gpu_time_pct": 37.2, "call_count": 40, "kernels": [{"name": "volta_sgemm_128x64_nn", "time_us": 3105.0, "calls": 40, "grid": "(24,16,1)", "block": "(128,1,1)"}, {"name": "gemv2T_kernel", "time_us": 296.2, "calls": 40, "grid": "(8,1,1)", "block": "(256,1,1)"}]}
+{"node": "logits", "gpu_time_us": 88.6, "gpu_time_pct": 1.0, "call_count": 40, "kernels": [{"name": "add_bias_kernel", "time_us": 88.6, "calls": 40, "grid": "(4,1,1)", "block": "(256,1,1)"}]}
+{"node": "output", "gpu_time_us": 156.8, "gpu_time_pct": 1.7, "call_count": 40, "kernels": [{"name": "softmax_warp_fp32", "time_us": 156.8, "calls": 40, "grid": "(2,1,1)", "block": "(128,1,1)"}]}
+{"node": "conv1/weights", "gpu_time_us": 0.0, "gpu_time_pct": 0.0, "call_count": 0, "kernels": []}
+{"node": "fc/weights", "gpu_time_us": 0.0, "gpu_time_pct": 0.0, "call_count": 0, "kernels": []}
+{"node": "fc/bias", "gpu_time_us": 0.0, "gpu_time_pct": 0.0, "call_count": 0, "kernels": []}
